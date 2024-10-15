@@ -10,7 +10,7 @@ import os
 app = Flask(__name__)
 
 # Folder untuk menyimpan embedding
-embedding_folder = "./Belajar-DeepFace/"
+embedding_folder = "./"
 embedding_file = os.path.join(embedding_folder, "face_embeddings.csv")
 
 # Fungsi untuk membuat embedding dari data karyawan
@@ -66,7 +66,7 @@ def create_faiss_index():
     num_dimensions = 128
     index = faiss.IndexFlatL2(num_dimensions)
     index.add(embeddings)
-    faiss.write_index(index, "./Belajar-DeepFace/faiss_index.bin")
+    faiss.write_index(index, "./faiss_index.bin")
     print("FAISS index created and saved to faiss_index.bin")
 
 @app.route('/register-employee', methods=['POST'])
@@ -108,7 +108,7 @@ def identify_employee():
     target_embedding = np.expand_dims(np.array(target_embedding, dtype='f'), axis=0)
 
     # Cari embedding terdekat di FAISS
-    index = faiss.read_index("./Belajar-DeepFace/faiss_index.bin")
+    index = faiss.read_index("./faiss_index.bin")
     k = 1
     distances, neighbours = index.search(target_embedding, k)
 
