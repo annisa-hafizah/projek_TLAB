@@ -6,6 +6,10 @@ import time
 
 # Inisialisasi webcam
 cap = cv2.VideoCapture(1)  # Ganti dengan 1 jika menggunakan webcam eksternal
+if not cap.isOpened():
+    print("Error: Webcam tidak dapat dibuka. Pastikan kamera terhubung dan berfungsi.")
+    exit()
+
 face_cascade = cv2.CascadeClassifier(cv2.data.haarcascades + 'haarcascade_frontalface_default.xml')
 
 # Set interval pengambilan gambar (10 detik)
@@ -46,10 +50,11 @@ while True:
                 else:
                     print(response.json()["message"])
             start_time = current_time
-    # Tampilkan frame webcam
+    
     # Tampilkan frame webcam dengan kotak di sekitar wajah
     for (x, y, w, h) in faces:
         cv2.rectangle(frame, (x, y), (x+w, y+h), (255, 0, 0), 2)
+    
     cv2.imshow('Webcam', frame)
 
     # Tekan ESC untuk keluar
