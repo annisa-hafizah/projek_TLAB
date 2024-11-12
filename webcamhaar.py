@@ -58,6 +58,28 @@ def get_time_period():
         return "sore"
     else:
         return "malam"
+
+def get_last_attendance_from_api(employee_name):
+    """Fetch the latest check-in and check-out times for the given employee from the API."""
+    try:
+        response = requests.get(f"{SERVER_URL}/attendance-records")
+        if response.status_code == 200:
+            attendance_records = response.json()
+
+            # Cari catatan presensi terakhir untuk karyawan ini
+            for record in attendance_records:
+                if record['employee_name'] == employee_name:
+                    return {
+                        "check_in_time": record['jam_masuk'],
+                        "check_out_time": record['jam_keluar'],
+                        "status": record['status']
+                    }
+        return None
+
+    except requests.exceptions.RequestException as e:
+        logger.error(f"Error fetching attendance records: {e}")
+        return None
+
         
 class FaceDetectionSystem:
     def __init__(self):
@@ -70,7 +92,7 @@ class FaceDetectionSystem:
         self.last_unknown_detection = 0
         self.attendance_records = {}
         self.last_detection_time = {}
-        self.cap = cv2.VideoCapture('http://172.254.0.124:2000/video')
+        self.cap = cv2.VideoCapture('http://172.254.1.122:4747/video')
         self.face_cascade = cv2.CascadeClassifier(cv2.data.haarcascades + 'haarcascade_frontalface_default.xml')
         self.frame_count = 0
         self.last_capture_time = time.time()
@@ -95,25 +117,44 @@ class FaceDetectionSystem:
                         self.last_unknown_detection = current_time
                     return
 
+                # Ambil data check-in dan check-out terakhir dari API
+                last_attendance = get_last_attendance_from_api(employee_name)
+                last_check_in_time = last_attendance['check_in_time'] if last_attendance else None
+                last_check_out_time = last_attendance['check_out_time'] if last_attendance else None
+                last_status = last_attendance['status'] if last_attendance else 'keluar'
+                
+                # Konversi waktu check-in dan check-out ke timestamp
+                last_check_in_timestamp = time.mktime(datetime.strptime(last_check_in_time, "%H:%M:%S").timetuple()) if last_check_in_time else None
+                last_check_out_timestamp = time.mktime(datetime.strptime(last_check_out_time, "%H:%M:%S").timetuple()) if last_check_out_time else None
+
                 if employee_name not in self.attendance_records:
                     self.attendance_records[employee_name] = {
-                        "status": "keluar",
-                        "check_in_time": None,
+                        "status": last_status,
+                        "check_in_time": last_check_in_timestamp if last_check_in_timestamp else None,
                         "last_detection": 0
                     }
 
                 record = self.attendance_records[employee_name]
-                
+
                 if current_time - record["last_detection"] >= self.CAPTURE_INTERVAL:
                     record["last_detection"] = current_time
-                    
-                    if record["status"] == "keluar":
+
+                    # Jika karyawan baru saja checkout, periksa apakah sudah 10 menit berlalu
+                    if record["status"] == "keluar" and last_check_out_timestamp:
+                        time_since_checkout = current_time - last_check_out_timestamp
+                        if time_since_checkout < 600:  # Kurang dari 10 menit sejak checkout
+                            logger.info(f"{employee_name} cannot check-in yet. Wait for 10 minutes.")
+                            return
+
+                    # Jika belum check-in atau lebih dari 10 menit setelah checkout, lakukan check-in
+                    elif record["status"] == "keluar" and not record["check_in_time"]:
                         self._record_attendance(employee_name, face_data, "masuk")
                         record["status"] = "masuk"
                         record["check_in_time"] = current_time
                         logger.info(f"{employee_name} checked in")
                         mqtt_client.publish(MQTT_TOPIC, f"{employee_name} checked in")
 
+                    # Proses checkout jika waktu sudah memenuhi interval checkout
                     elif record["status"] == "masuk":
                         time_since_checkin = current_time - record["check_in_time"]
                         if time_since_checkin >= self.CHECKOUT_INTERVAL:
@@ -125,6 +166,7 @@ class FaceDetectionSystem:
 
         except requests.exceptions.RequestException as e:
             logger.error(f"Server communication error: {e}")
+
 
     def _record_attendance(self, employee_name, image_base64, status):
         try:
@@ -146,7 +188,14 @@ class FaceDetectionSystem:
                     logger.warning(f"{employee_name} {status} - {time_period} - {data['warning']}")
                 else:
                     logger.info(f"{employee_name} {status} - {time_period}")
-                    
+                
+                # Text-to-speech announcement
+                if status == "masuk":
+                    speak_text(f"Selamat {time_period} {employee_name}, selamat datang di ti leb, silakan {status}")
+
+                else :
+                    speak_text(f"sampai jumpa {employee_name}, hati-hati di jalan")
+                                   
             elif response.status_code == 400 and "early_checkout" in response.json().get("status", ""):
                 logger.warning(f"Early checkout attempt for {employee_name} - Minimum working time not reached")
             else:

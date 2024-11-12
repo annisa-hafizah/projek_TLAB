@@ -345,49 +345,73 @@ elif menu == "Analisis Data":
                              title='Rata-rata Durasi Jam Kerja per Karyawan')
             st.plotly_chart(fig_hours)
             
-            # 3. Analisis Ketidakhadiran
+            # Di bagian analisis ketidakhadiran, ubah kode berikut:
             st.subheader("Analisis Ketidakhadiran")
-            
+
             # Get all unique dates in attendance records
-            all_dates = pd.date_range(start=df_attendance['date'].min(),
-                                    end=df_attendance['date'].max(),
-                                    freq='D')
-            
+            working_dates = pd.date_range(start=df_attendance['date'].min(),
+                                        end=df_attendance['date'].max(),
+                                        freq='B')  # 'B' untuk business days (Senin-Jumat)
+
             # Create a DataFrame with all employee-date combinations
             employee_names = [emp['name'] for emp in employees]
-            date_employee_combinations = pd.MultiIndex.from_product([all_dates, employee_names],
-                                                                  names=['date', 'employee_name'])
+            date_employee_combinations = pd.MultiIndex.from_product([working_dates, employee_names],
+                                                                names=['date', 'employee_name'])
             full_attendance = pd.DataFrame(index=date_employee_combinations).reset_index()
-            
-            # Merge with actual attendance
+
+            # Convert date column to datetime if it isn't already
+            if not pd.api.types.is_datetime64_any_dtype(df_attendance['date']):
+                df_attendance['date'] = pd.to_datetime(df_attendance['date'])
+
+            # Merge with actual attendance and mark present/absent
             merged_attendance = pd.merge(full_attendance,
-                                       df_attendance[['date', 'employee_name']],
-                                       how='left',
-                                       on=['date', 'employee_name'])
-            
-            # Calculate absences
-            absences = merged_attendance.groupby('employee_name').apply(lambda x: x.isnull().sum()['jam_masuk']).reset_index()
+                                    df_attendance[['date', 'employee_name']],
+                                    how='left',
+                                    on=['date', 'employee_name'],
+                                    indicator=True)
+
+            # Mark attendance status
+            merged_attendance['present'] = merged_attendance['_merge'] == 'both'
+
+            # Calculate absences per employee
+            absences = merged_attendance.groupby('employee_name')['present'].apply(
+                lambda x: (~x).sum()
+            ).reset_index()
             absences.columns = ['employee_name', 'absence_count']
-            
+
             # Create bar chart for absences
             fig_absences = px.bar(absences,
                                 x='employee_name',
                                 y='absence_count',
                                 labels={'employee_name': 'Nama Karyawan',
-                                       'absence_count': 'Jumlah Ketidakhadiran'},
-                                title='Jumlah Ketidakhadiran per Karyawan')
+                                        'absence_count': 'Jumlah Ketidakhadiran'},
+                                title='Jumlah Ketidakhadiran per Karyawan (Hari Kerja)')
+
+            # Customize the chart
+            fig_absences.update_traces(marker_color='#FF6B6B')  # Warna merah untuk ketidakhadiran
+            fig_absences.update_layout(
+                xaxis_title="Nama Karyawan",
+                yaxis_title="Jumlah Ketidakhadiran",
+                bargap=0.2,
+                plot_bgcolor='white'
+            )
+
+            # Add gridlines
+            fig_absences.update_yaxes(gridcolor='lightgray', gridwidth=0.5)
+
             st.plotly_chart(fig_absences)
-            
-            # Display summary statistics
+
+            # Tambahan informasi statistik
+            total_working_days = len(working_dates)
+            avg_attendance_rate = 100 * (1 - absences['absence_count'].mean() / total_working_days)
+
             col1, col2, col3 = st.columns(3)
             with col1:
-                st.metric("Total Karyawan", len(employees))
+                st.metric("Total Hari Kerja", f"{total_working_days} hari")
             with col2:
-                st.metric("Rata-rata Kehadiran per Hari", 
-                         round(df_attendance.groupby('date')['employee_name'].count().mean(), 2))
+                st.metric("Rata-rata Kehadiran", f"{avg_attendance_rate:.1f}%")
             with col3:
-                st.metric("Rata-rata Jam Kerja", 
-                         f"{round(df_attendance['working_hours'].mean(), 2)} jam")
+                st.metric("Total Karyawan", len(employees))
             
         else:
             st.warning("Belum ada data presensi untuk dianalisis.")
