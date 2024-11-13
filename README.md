@@ -6,4 +6,4 @@ untuk sistem operasi windows dan linux=
 - ram 12gb
 - gpu bawaan
 
-untuk menjalankan aplikasi app.py dijalankan di server dan webcam
+untuk menjalankan aplikasi app.py dijalankan di server dan webcamhaar.py dijalankan di client(jetson) dan untuk employee_registration.py dijalankan di server 
