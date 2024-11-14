@@ -30,10 +30,10 @@ logging.getLogger('werkzeug').setLevel(logging.ERROR)
 
 # Path to SQLite database
 db_path = os.getenv('DB_PATH')
-model_name = os.getenv('MODEL_NAME')
-detector_backend = os.getenv('DETECTOR_BACKEND')
+MODEL_NAME = os.getenv('MODEL_NAME')
+DETECTOR_BACKEND = os.getenv('DETECTOR_BACKEND')
 recognition_threshold = float(os.getenv('FACE_RECOGNITION_THRESHOLD'))
-MAX_UNKNOWN = os.getenv('MAX_UNKNOWN')
+
 # Initialize SQLite database and create tables if they don't exist
 def init_db():
     with sqlite3.connect(db_path) as conn:
@@ -194,9 +194,6 @@ def register_employee():
     position = data['position']
     image_base64 = data['image']  # The base64 image data
 
-    model_name = model_name
-    detector_backend = detector_backend
-
     try:
         # Decode base64 image to process it with DeepFace
         image_bytes = base64.b64decode(image_base64)
@@ -206,8 +203,8 @@ def register_employee():
         # Generate embedding
         objs = DeepFace.represent(
             img_path=img,
-            model_name=model_name,
-            detector_backend=detector_backend,
+            model_name=MODEL_NAME,
+            detector_backend=DETECTOR_BACKEND,
             enforce_detection=False
         )
 
@@ -420,7 +417,7 @@ def record_attendance():
                 """, (employee_name,))
                 count = cursor.fetchone()[0]
 
-                if count > MAX_UNKNOWN:
+                if count > 10:
                     cursor.execute("""
                         DELETE FROM attendance WHERE employee_name = ? 
                         ORDER BY date ASC, jam_masuk ASC LIMIT 1
@@ -447,8 +444,14 @@ def record_attendance():
                         record_id, jam_masuk = record
                         # Calculate working hours
                         jam_masuk_time = datetime.strptime(jam_masuk, '%H:%M:%S')
-                        jam_keluar_time = datetime.now()
-                        total_jam_kerja = jam_keluar_time - jam_masuk_time
+                        jam_keluar_time = datetime.strptime(current_time, '%H:%M:%S')
+                        time_diff_seconds = (jam_keluar_time - jam_masuk_time).seconds
+                        
+                        # Convert to hours, minutes, seconds
+                        hours = time_diff_seconds // 3600
+                        minutes = (time_diff_seconds % 3600) // 60
+                        seconds = time_diff_seconds % 60
+                        total_jam_kerja = f"{hours:02d}:{minutes:02d}:{seconds:02d}"
                         
                         # Update existing record with checkout time
                         cursor.execute("""
@@ -458,7 +461,7 @@ def record_attendance():
                                 status = 'keluar',
                                 image_capture = ?
                             WHERE id = ?
-                        """, (current_time, str(total_jam_kerja), image_capture, record_id))
+                        """, (current_time, total_jam_kerja, image_capture, record_id))
                         
                         response_message = f"Checkout berhasil untuk {employee_name}"
                     else:
