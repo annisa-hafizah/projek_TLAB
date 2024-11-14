@@ -33,7 +33,7 @@ db_path = os.getenv('DB_PATH')
 model_name = os.getenv('MODEL_NAME')
 detector_backend = os.getenv('DETECTOR_BACKEND')
 recognition_threshold = float(os.getenv('FACE_RECOGNITION_THRESHOLD'))
-
+MAX_UNKNOWN = os.getenv('MAX_UNKNOWN')
 # Initialize SQLite database and create tables if they don't exist
 def init_db():
     with sqlite3.connect(db_path) as conn:
@@ -420,7 +420,7 @@ def record_attendance():
                 """, (employee_name,))
                 count = cursor.fetchone()[0]
 
-                if count > 10:
+                if count > MAX_UNKNOWN:
                     cursor.execute("""
                         DELETE FROM attendance WHERE employee_name = ? 
                         ORDER BY date ASC, jam_masuk ASC LIMIT 1
