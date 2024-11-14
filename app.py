@@ -14,6 +14,7 @@ from scipy.spatial.distance import cosine
 from dotenv import load_dotenv
 import os
 import logging
+import requests
 
 load_dotenv()
 
@@ -29,8 +30,8 @@ logging.getLogger('werkzeug').setLevel(logging.ERROR)
 
 # Path to SQLite database
 db_path = os.getenv('DB_PATH')
-model_name = os.getenv('FACE_RECOGNITION_MODEL')
-detector_backend = os.getenv('FACE_DETECTOR_BACKEND')
+model_name = os.getenv('MODEL_NAME')
+detector_backend = os.getenv('DETECTOR_BACKEND')
 recognition_threshold = float(os.getenv('FACE_RECOGNITION_THRESHOLD'))
 
 # Initialize SQLite database and create tables if they don't exist
@@ -193,8 +194,8 @@ def register_employee():
     position = data['position']
     image_base64 = data['image']  # The base64 image data
 
-    model_name = "Facenet"
-    detector_backend = "opencv"
+    model_name = model_name
+    detector_backend = detector_backend
 
     try:
         # Decode base64 image to process it with DeepFace
@@ -227,28 +228,36 @@ def register_employee():
 
 @app.route('/identify-employee', methods=['POST'])
 def identify_employee():
-    data = request.json
-    if not data or 'image' not in data:
-        return jsonify({"message": "No image data provided"}), 400
-
     try:
+        data = request.json
+        if not data or 'image' not in data:
+            return jsonify({"message": "No image data provided"}), 400
+
         image_base64 = data['image']
+        app.logger.info(f"Received image data")
+
+        # Decode image
         image_bytes = base64.b64decode(image_base64)
         img_array = np.frombuffer(image_bytes, np.uint8)
         img = cv2.imdecode(img_array, cv2.IMREAD_COLOR)
 
         if img is None:
+            app.logger.error("Image decoding resulted in None")
             return jsonify({"message": "Failed to decode image"}), 400
 
+        # Generate embedding
         target_embedding = DeepFace.represent(
             img_path=img,
             model_name="Facenet",
             detector_backend="opencv",
             enforce_detection=False
         )[0]["embedding"]
+        app.logger.info("Successfully generated face embedding")
 
-        # Fetch embeddings and create recognition system
+        # Fetch embeddings from database
         employees_data = fetch_embeddings()
+        app.logger.info(f"Fetched {len(employees_data)} embeddings from database")
+
         embeddings = []
         employee_details = []
         
@@ -257,17 +266,29 @@ def identify_employee():
             embeddings.append(embedding)
             employee_details.append((emp['name'], emp['position']))
 
+        # Perform identification
         recognition = EnhancedFaceRecognition(recognition_threshold)
         recognition.build_index(embeddings, employee_details)
-        
         name, position, confidence = recognition.identify(target_embedding)
-        
+        app.logger.info(f"Identification result: {name} with confidence {confidence}")
+
         if name == "Unknown":
+            app.logger.info(f"Unknown person detected, saving to attendance.")
             name = "Unknown Person"
-            # Insert the unknown person's details into attendance logs
-            status = 'masuk'  # or 'keluar' based on your system
-            record_attendance({"name": name, "image": image_base64, "status": status})
+
+            # Send POST request to record attendance
+            attendance_data = {
+                "name": name,
+                "image": image_base64,
+                "status": "masuk"
+            }
+            response = requests.post(f"http://localhost:5000/record-attendance", json=attendance_data)
             
+            if response.status_code == 200:
+                app.logger.info(f"Successfully recorded attendance for {name}")
+            else:
+                app.logger.error(f"Failed to record attendance: {response.text}")
+
         return jsonify({
             "name": name,
             "position": position,
@@ -275,7 +296,9 @@ def identify_employee():
         }), 200
 
     except Exception as e:
+        app.logger.error(f"Unexpected error in identify_employee: {str(e)}")
         return jsonify({"message": f"Error: {str(e)}"}), 500
+
 
     
 @app.route('/employees', methods=['GET'])
@@ -383,95 +406,111 @@ def record_attendance():
             cursor = conn.cursor()
             current_date = datetime.now().strftime('%Y-%m-%d')
             current_time = datetime.now().strftime('%H:%M:%S')
-            
-            # Check if it's late arrival (after 11:00)
-            is_late = False
-            if status == 'masuk':
-                current_datetime = datetime.now()
-                max_arrival = current_datetime.replace(hour=11, minute=0, second=0)
-                is_late = current_datetime > max_arrival
 
-            # If it's an unknown person, record only the "masuk" status
+            # If it's an unknown person, handle separately
             if employee_name == "Unknown Person":
                 cursor.execute("""
-                    INSERT INTO attendance (
-                        employee_name, date, jam_masuk, image_capture, status
-                    )
+                    INSERT INTO attendance (employee_name, date, jam_masuk, image_capture, status)
                     VALUES (?, ?, ?, ?, ?)
                 """, (employee_name, current_date, current_time, image_capture, status))
-                
-            else:
-                # Check if employee already has an entry for today
+
+                # Count and manage entries for unknown person
                 cursor.execute("""
-                    SELECT id, jam_masuk, status, jam_keluar 
-                    FROM attendance 
-                    WHERE employee_name = ? AND date = ? 
-                    ORDER BY jam_masuk DESC LIMIT 1
-                """, (employee_name, current_date))
-                
-                existing_record = cursor.fetchone()
-                
-                if existing_record:
-                    record_id, jam_masuk, current_status, jam_keluar = existing_record
+                    SELECT COUNT(*) FROM attendance WHERE employee_name = ?
+                """, (employee_name,))
+                count = cursor.fetchone()[0]
+
+                if count > 10:
+                    cursor.execute("""
+                        DELETE FROM attendance WHERE employee_name = ? 
+                        ORDER BY date ASC, jam_masuk ASC LIMIT 1
+                    """, (employee_name,))
+                    app.logger.info("Oldest unknown person entry deleted to maintain limit of 10.")
+
+                response_message = "Attendance recorded for unknown person"
+            else:
+                if status == 'keluar':
+                    # Find the most recent check-in without checkout for this employee today
+                    cursor.execute("""
+                        SELECT id, jam_masuk 
+                        FROM attendance 
+                        WHERE employee_name = ? 
+                        AND date = ? 
+                        AND status = 'masuk' 
+                        AND jam_keluar IS NULL
+                        ORDER BY jam_masuk DESC LIMIT 1
+                    """, (employee_name, current_date))
                     
-                    # Handle checkout - only if there's no previous checkout and status is 'masuk'
-                    if status == 'keluar' and current_status == 'masuk' and jam_keluar is None:
-                        # Calculate time difference
+                    record = cursor.fetchone()
+                    
+                    if record:
+                        record_id, jam_masuk = record
+                        # Calculate working hours
                         jam_masuk_time = datetime.strptime(jam_masuk, '%H:%M:%S')
-                        current_time_obj = datetime.strptime(current_time, '%H:%M:%S')
+                        jam_keluar_time = datetime.now()
+                        total_jam_kerja = jam_keluar_time - jam_masuk_time
                         
-                        # Calculate elapsed time in minutes
-                        elapsed_time = current_time_obj - jam_masuk_time
-                        elapsed_minutes = elapsed_time.total_seconds() / 60
+                        # Update existing record with checkout time
+                        cursor.execute("""
+                            UPDATE attendance 
+                            SET jam_keluar = ?, 
+                                jam_kerja = ?,
+                                status = 'keluar',
+                                image_capture = ?
+                            WHERE id = ?
+                        """, (current_time, str(total_jam_kerja), image_capture, record_id))
                         
-                        # Only allow checkout if more than 10 minutes have passed
-                        if elapsed_minutes >= 10:
-                            jam_kerja = str(elapsed_time)
-                            cursor.execute("""
-                                UPDATE attendance 
-                                SET jam_keluar = ?, jam_kerja = ?, status = 'keluar'
-                                WHERE id = ?
-                            """, (current_time, jam_kerja, record_id))
-                            response_message = f"Checkout recorded for {employee_name}"
-                        else:
+                        response_message = f"Checkout berhasil untuk {employee_name}"
+                    else:
+                        return jsonify({
+                            "message": "Tidak dapat melakukan checkout karena tidak ditemukan check-in yang sesuai",
+                            "status": "no_checkin_found"
+                        }), 400
+                
+                else:  # status == 'masuk'
+                    # Check for recent checkout
+                    cursor.execute("""
+                        SELECT jam_keluar 
+                        FROM attendance 
+                        WHERE employee_name = ? 
+                        AND date = ? 
+                        AND status = 'keluar'
+                        ORDER BY jam_keluar DESC LIMIT 1
+                    """, (employee_name, current_date))
+                    
+                    last_checkout = cursor.fetchone()
+                    
+                    if last_checkout:
+                        last_checkout_time = datetime.strptime(last_checkout[0], '%H:%M:%S')
+                        time_since_last_checkout = datetime.now() - last_checkout_time.replace(
+                            year=datetime.now().year,
+                            month=datetime.now().month,
+                            day=datetime.now().day
+                        )
+                        
+                        if time_since_last_checkout.total_seconds() < 600:
                             return jsonify({
-                                "message": "Minimum working time (10 minutes) not reached",
-                                "status": "early_checkout"
+                                "message": "Harap tunggu 10 menit sebelum check-in kembali.",
+                                "status": "too_early_for_checkin"
                             }), 400
                     
-                    # Prevent duplicate check-in
-                    elif status == 'masuk' and current_status == 'masuk' and jam_keluar is None:
-                        return jsonify({
-                            "message": f"{employee_name} already checked in today",
-                            "status": "already_checked_in"
-                        }), 200
-                        
-                    # Allow new check-in if previous session was checked out
-                    elif status == 'masuk' and (current_status == 'keluar' or jam_keluar is not None):
-                        cursor.execute("""
-                            INSERT INTO attendance (
-                                employee_name, date, jam_masuk, image_capture, status
-                            )
-                            VALUES (?, ?, ?, ?, ?)
-                        """, (employee_name, current_date, current_time, image_capture, status))
-                        response_message = f"New check-in recorded for {employee_name}"
-                        
-                elif status == 'masuk':  # First check-in of the day
+                    # Create new check-in record
                     cursor.execute("""
                         INSERT INTO attendance (
-                            employee_name, date, jam_masuk, image_capture, status
-                        )
-                        VALUES (?, ?, ?, ?, ?)
-                    """, (employee_name, current_date, current_time, image_capture, status))
-                    response_message = f"First check-in recorded for {employee_name}"
+                            employee_name, date, jam_masuk, 
+                            image_capture, status
+                        ) VALUES (?, ?, ?, ?, ?)
+                    """, (employee_name, current_date, current_time, image_capture, 'masuk'))
+                    
+                    response_message = f"Check-in berhasil untuk {employee_name}"
 
             conn.commit()
             
-            # Determine time period
             time_period = get_time_period()
+            is_late = is_late_arrival() if status == 'masuk' else False
             
             response_data = {
-                "message": response_message if 'response_message' in locals() else f"Attendance recorded for {employee_name}",
+                "message": response_message,
                 "date": current_date,
                 "time": current_time,
                 "status": status,
@@ -482,6 +521,10 @@ def record_attendance():
                 response_data["warning"] = "Late arrival detected"
                 
             return jsonify(response_data), 200
+
+    except Exception as e:
+        app.logger.error(f"Error in record_attendance: {str(e)}")
+        return jsonify({"message": f"Error: {str(e)}"}), 500
 
     except Exception as e:
         return jsonify({"message": f"Error: {str(e)}"}), 500
