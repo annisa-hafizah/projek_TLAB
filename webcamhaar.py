@@ -41,7 +41,7 @@ def on_connect(client, userdata, flags, rc):
         logger.error("Failed to connect to MQTT broker, Return code %d", rc)
 
 mqtt_client.on_connect = on_connect
-# mqtt_client.username_pw_set(MQTT_USER, MQTT_PASSWORD)
+mqtt_client.username_pw_set(MQTT_USER, MQTT_PASSWORD)
 mqtt_client.connect(MQTT_BROKER, MQTT_PORT, 60)
 mqtt_client.loop_start()
 
