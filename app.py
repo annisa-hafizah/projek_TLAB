@@ -33,7 +33,7 @@ db_path = os.getenv('DB_PATH')
 MODEL_NAME = os.getenv('MODEL_NAME')
 DETECTOR_BACKEND = os.getenv('DETECTOR_BACKEND')
 recognition_threshold = float(os.getenv('FACE_RECOGNITION_THRESHOLD'))
-
+API_REQUEST = os.getenv('API_REQUEST')
 # Initialize SQLite database and create tables if they don't exist
 def init_db():
     with sqlite3.connect(db_path) as conn:
@@ -114,7 +114,7 @@ def convert_embedding(blob):
     return np.frombuffer(blob, dtype='f')
 
 class EnhancedFaceRecognition:
-    def __init__(self, threshold=os.getenv('FACE_RECOGNITION_THRESHOLD')):
+    def __init__(self, threshold= recognition_threshold):
         self.threshold = threshold
         self.index = None
         self.employee_details = []
@@ -279,7 +279,7 @@ def identify_employee():
                 "image": image_base64,
                 "status": "masuk"
             }
-            response = requests.post(f"http://localhost:5000/record-attendance", json=attendance_data)
+            response = requests.post(API_REQUEST, json=attendance_data)
             
             if response.status_code == 200:
                 app.logger.info(f"Successfully recorded attendance for {name}")
