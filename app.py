@@ -245,8 +245,8 @@ def identify_employee():
         # Generate embedding
         target_embedding = DeepFace.represent(
             img_path=img,
-            model_name="Facenet",
-            detector_backend="opencv",
+            model_name=MODEL_NAME,
+            detector_backend=DETECTOR_BACKEND,
             enforce_detection=False
         )[0]["embedding"]
         app.logger.info("Successfully generated face embedding")

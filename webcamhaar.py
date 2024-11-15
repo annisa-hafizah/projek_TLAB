@@ -41,7 +41,7 @@ def on_connect(client, userdata, flags, rc):
         logger.error("Failed to connect to MQTT broker, Return code %d", rc)
 
 mqtt_client.on_connect = on_connect
-mqtt_client.username_pw_set(MQTT_USER, MQTT_PASSWORD)
+# mqtt_client.username_pw_set(MQTT_USER, MQTT_PASSWORD)
 mqtt_client.connect(MQTT_BROKER, MQTT_PORT, 60)
 mqtt_client.loop_start()
 
@@ -181,7 +181,7 @@ class FaceDetectionSystem:
     def __init__(self):
         self.unknown_faces = {}  # Dictionary to track unknown faces and their detection times
         self.SERVER_URL = SERVER_URL
-        self.CAPTURE_INTERVAL = 10
+        self.CAPTURE_INTERVAL = 5
         self.CHECKOUT_INTERVAL = 20  # 10 minutes for testing
         self.UNKNOWN_RECORD_INTERVAL = 300  # 5 minutes between unknown person records
         self.FRAME_SKIP = 2
