@@ -491,7 +491,7 @@ def record_attendance():
                             day=datetime.now().day
                         )
                         
-                        if time_since_last_checkout.total_seconds() < 600:
+                        if time_since_last_checkout.total_seconds() < 300:
                             return jsonify({
                                 "message": "Harap tunggu 10 menit sebelum check-in kembali.",
                                 "status": "too_early_for_checkin"
