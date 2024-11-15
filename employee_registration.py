@@ -56,6 +56,36 @@ def read_image(uploaded_image):
     image = cv2.imdecode(image_bytes, 1)  # Decode the image as OpenCV format
     return image
 
+# Helper functions for Excel export
+def create_excel_download(df):
+    output = BytesIO()
+    with pd.ExcelWriter(output, engine='openpyxl') as writer:
+        # Write the main data
+        df.to_excel(writer, sheet_name='Attendance', index=False)
+        
+        # Get the worksheet
+        worksheet = writer.sheets['Attendance']
+        
+        # Adjust column widths
+        for idx, col in enumerate(df.columns):
+            max_length = max(
+                df[col].astype(str).apply(len).max(),
+                len(col)
+            )
+            worksheet.column_dimensions[chr(65 + idx)].width = max_length + 2
+    
+    output.seek(0)
+    return output.getvalue()
+
+def get_excel_filename(selected_employee, filter_date):
+    if selected_employee == "Semua Karyawan":
+        employee_part = "all_employees"
+    else:
+        employee_part = selected_employee.replace(" ", "_")
+    
+    date_part = filter_date.strftime("%Y-%m-%d") if filter_date else "all_dates"
+    return f'attendance_{employee_part}_{date_part}.xlsx'
+
 # Employee registration
 if menu == "Pendaftaran Karyawan":
     st.title("Pendaftaran Karyawan")
@@ -170,25 +200,27 @@ elif menu == "Edit/Hapus Karyawan":
 elif menu == "Log Attendance":
     st.title("Log Attendance Karyawan")
     
+    # Inisialisasi DataFrame kosong di awal
+    df_excel = pd.DataFrame()
+    df_display = pd.DataFrame()
+    
     # Tambahkan filter
     col1, col2 = st.columns(2)
     with col1:
         emp_response = requests.get(f"{SERVER_URL}/employees-full")
         if emp_response.status_code == 200:
             employees = emp_response.json()
-            # Include "Unknown Person" in the employee list
             employee_names = ["Semua Karyawan", "Unknown Person"] + [emp["name"] for emp in employees]
             selected_employee = st.selectbox("Filter berdasarkan Karyawan:", employee_names)
     
     with col2:
         filter_date = st.date_input("Filter berdasarkan Tanggal:")
     
-    # Debug: Cek struktur data yang diterima
+    # Fetch and display data when button is clicked
     if st.button("Tampilkan Log Attendance"):
         if selected_employee == "Semua Karyawan":
             response = requests.get(f"{SERVER_URL}/attendance-records")
         elif selected_employee == "Unknown Person":
-            # Fetch records for unknown individuals
             response = requests.get(f"{SERVER_URL}/attendance-records/Unknown Person")
         else:
             response = requests.get(f"{SERVER_URL}/attendance-records/{selected_employee}")
@@ -197,7 +229,6 @@ elif menu == "Log Attendance":
             attendance_data = response.json()
             
             if attendance_data:
-                # Filter berdasarkan tanggal jika dipilih
                 if filter_date:
                     attendance_data = [
                         record for record in attendance_data 
@@ -205,25 +236,34 @@ elif menu == "Log Attendance":
                     ]
                 
                 if attendance_data:
-                    # Create a list to hold the rows of our table
+                    # Prepare data for both display and Excel export
                     table_data = []
+                    excel_data = []  # Separate list for Excel export without images
                     
                     for record in attendance_data:
-                        # Convert base64 image to displayable format
+                        # Format tanggal
+                        tanggal = datetime.strptime(record['date'], '%Y-%m-%d').strftime('%d-%m-%Y')
+                        
+                        # Prepare Excel data (without images)
+                        excel_row = [
+                            record.get('employee_name', 'Unknown Person'),
+                            tanggal,
+                            record.get('jam_masuk', ''),
+                            record.get('jam_keluar', ''),
+                            record.get('jam_kerja', ''),
+                            record.get('status', '')
+                        ]
+                        excel_data.append(excel_row)
+                        
+                        # Prepare display data (with images)
                         if record.get('image_capture'):
                             try:
                                 image_data = base64.b64decode(record['image_capture'])
                                 img = Image.open(BytesIO(image_data))
-                                
-                                # Resize image to make it smaller in the table
                                 img.thumbnail((100, 100))
-                                
-                                # Convert PIL Image to bytes
                                 buffered = BytesIO()
                                 img.save(buffered, format="PNG")
                                 img_str = base64.b64encode(buffered.getvalue()).decode()
-                                
-                                # Create HTML for the image
                                 img_html = f'<img src="data:image/png;base64,{img_str}" style="width:100px;">'
                             except Exception as e:
                                 st.error(f"Error processing image: {e}")
@@ -231,33 +271,27 @@ elif menu == "Log Attendance":
                         else:
                             img_html = ""
                         
-                        # Format tanggal
-                        tanggal = datetime.strptime(record['date'], '%Y-%m-%d').strftime('%d-%m-%Y')
-                        
-                        # Add this record's data to our table - using get() to avoid KeyError
-                        table_data.append([
-                            record.get('employee_name', 'Unknown Person'),  # Default to 'Unknown Person' if not found
-                            tanggal,
-                            record.get('jam_masuk', ''),
-                            record.get('jam_keluar', ''),
-                            record.get('jam_kerja', ''),
-                            record.get('status', ''),
-                            img_html
-                        ])
+                        display_row = excel_row.copy()
+                        display_row.append(img_html)
+                        table_data.append(display_row)
                     
-                    # Create DataFrame
-                    df = pd.DataFrame(table_data, columns=[
+                    # Create DataFrames for display and Excel
+                    columns = [
                         "Nama Karyawan",
                         "Tanggal",
-                        "jam_masuk",
-                        "jam_keluar",
-                        "jam_kerja",
-                        "status",
-                        "image_capture"
-                    ])
+                        "Jam Masuk",
+                        "Jam Keluar",
+                        "Jam Kerja",
+                        "Status"
+                    ]
+                    
+                    df_excel = pd.DataFrame(excel_data, columns=columns)
+                    
+                    display_columns = columns + ["Foto"]
+                    df_display = pd.DataFrame(table_data, columns=display_columns)
                     
                     # Display the table
-                    st.write(df.to_html(escape=False, index=False), unsafe_allow_html=True)
+                    st.write(df_display.to_html(escape=False, index=False), unsafe_allow_html=True)
                     
                 else:
                     st.info("Tidak ada data presensi untuk filter yang dipilih.")
@@ -266,19 +300,18 @@ elif menu == "Log Attendance":
         else:
             st.error(f"Gagal mengambil data presensi: {response.text}")
 
-    # Tambahkan opsi ekspor data
-    if st.button("Ekspor Data ke CSV"):
-        if 'df' in locals():  # Check if DataFrame exists
-            # Convert DataFrame to CSV
-            csv = df.to_csv(index=False).encode('utf-8')
+    # Add export button - only show if we have data
+    if not df_excel.empty:
+        st.download_button(
+            label="📥 Download Excel",
+            data=create_excel_download(df_excel),
+            file_name=get_excel_filename(selected_employee, filter_date),
+            mime='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+            key='download-excel'
+        )
+
+
             
-            # Download button
-            st.download_button(
-                label="Download CSV",
-                data=csv,
-                file_name=f'absensi_{filter_date.strftime("%Y-%m-%d") if filter_date else "all"}.csv',
-                mime='text/csv',
-            )
 elif menu == "Analisis Data":
     st.title("Analisis Data Karyawan")
     
