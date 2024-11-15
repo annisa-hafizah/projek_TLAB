@@ -1,6 +1,6 @@
 # projek_TLAB
 spesifikasi minimum yang dibutuhkan:
-- Menggunakan Python 3.10.12
+
 untuk sistem operasi windows dan linux= 
 - intel i3 gen 7 dual core 4 threads 3.90ghz
 - ram 12gb
