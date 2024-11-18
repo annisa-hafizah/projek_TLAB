@@ -272,7 +272,7 @@ class FaceDetectionSystem:
                 
                 # MQTT and speech
                 # mqtt_client.publish(MQTT_TOPIC, "Gate remains open for unknown person")
-                self.speaker.speak_text_async(f"Selamat datang di ti leb")
+                # self.speaker.speak_text_async(f"Selamat datang di ti leb")
             else:
                 logger.error(f"Failed to record unknown person: {response.text}")
                 
