@@ -222,9 +222,9 @@ class FaceDetectionSystem:
     def __init__(self):
         self.unknown_faces = {}
         self.SERVER_URL = SERVER_URL
-        self.CAPTURE_INTERVAL = 5
-        self.CHECKOUT_INTERVAL = 10
-        self.UNKNOWN_RECORD_INTERVAL = 10
+        self.CAPTURE_INTERVAL = 10
+        self.CHECKOUT_INTERVAL = 60
+        self.UNKNOWN_RECORD_INTERVAL = 300
         self.FRAME_SKIP = 2
         self.DETECTION_SCALE = 0.5
         self.attendance_records = {}
