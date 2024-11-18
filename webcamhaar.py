@@ -9,8 +9,10 @@ from gtts import gTTS
 import os
 import paho.mqtt.client as mqtt
 from dotenv import load_dotenv
-import os
 import hashlib
+import threading
+from threading import Lock
+import subprocess
 
 load_dotenv()
 
@@ -41,14 +43,11 @@ def on_connect(client, userdata, flags, rc):
         logger.error("Failed to connect to MQTT broker, Return code %d", rc)
 
 mqtt_client.on_connect = on_connect
-mqtt_client.username_pw_set(MQTT_USER, MQTT_PASSWORD)
+# mqtt_client.username_pw_set(MQTT_USER, MQTT_PASSWORD)
 mqtt_client.connect(MQTT_BROKER, MQTT_PORT, 60)
 mqtt_client.loop_start()
 
-def speak_text(text):
-    tts = gTTS(text=text, lang='id')
-    tts.save("greeting.mp3")
-    os.system("mpg321 greeting.mp3")
+
     
 def get_time_period():
     hour = datetime.now().hour
@@ -176,14 +175,56 @@ def get_last_attendance_from_api(employee_name):
 def generate_face_hash(face_image_base64):
     """Generate a unique hash for the face image."""
     return hashlib.md5(face_image_base64.encode()).hexdigest()
+
+class AsyncSpeaker:
+    def __init__(self):
+        self.speech_queue_lock = Lock()
+        self.current_process = None
+        self.process_lock = Lock()
+    
+    def speak_text_async(self, text):
+        # Create a thread to handle the speech
+        speech_thread = threading.Thread(target=self._speak_text_worker, args=(text,))
+        speech_thread.daemon = True  # Set as daemon so it doesn't prevent program exit
+        speech_thread.start()
+    
+    def _speak_text_worker(self, text):
+        try:
+            # Generate unique filename based on text to avoid conflicts
+            filename = f"greeting_{hash(text)}.mp3"
+            
+            # Generate speech file
+            tts = gTTS(text=text, lang='id')
+            with self.speech_queue_lock:
+                tts.save(filename)
+            
+            # Play the audio file
+            with self.process_lock:
+                if self.current_process is not None:
+                    # Stop current speech if one is playing
+                    self.current_process.terminate()
+                    self.current_process.wait()
+                
+                # Start new speech
+                self.current_process = subprocess.Popen(['mpg321', filename])
+                self.current_process.wait()
+            
+            # Clean up the audio file
+            try:
+                os.remove(filename)
+            except OSError:
+                pass
+                
+        except Exception as e:
+            logging.error(f"Error in speech thread: {e}")
         
 class FaceDetectionSystem:
     def __init__(self):
-        self.unknown_faces = {}  # Dictionary to track unknown faces and their detection times
+        self.unknown_faces = {}
         self.SERVER_URL = SERVER_URL
         self.CAPTURE_INTERVAL = 5
-        self.CHECKOUT_INTERVAL = 20  # 10 minutes for testing
-        self.UNKNOWN_RECORD_INTERVAL = 300  # 5 minutes between unknown person records
+        self.CHECKOUT_INTERVAL = 10
+        self.UNKNOWN_RECORD_INTERVAL = 10
         self.FRAME_SKIP = 2
         self.DETECTION_SCALE = 0.5
         self.attendance_records = {}
@@ -191,6 +232,7 @@ class FaceDetectionSystem:
         self.face_cascade = cv2.CascadeClassifier(cv2.data.haarcascades + 'haarcascade_frontalface_default.xml')
         self.frame_count = 0
         self.last_capture_time = time.time()
+        self.speaker = AsyncSpeaker()  # Initialize AsyncSpeaker
 
     def _handle_unknown_person(self, face_data):
         """Handle detection and recording of unknown persons."""
@@ -229,8 +271,8 @@ class FaceDetectionSystem:
                 logger.info(f"Successfully recorded unknown person: {unknown_id}")
                 
                 # MQTT and speech
-                mqtt_client.publish(MQTT_TOPIC, "Gate remains open for unknown person")
-                speak_text(f"Tamu, Selamat {get_time_period()}.")
+                # mqtt_client.publish(MQTT_TOPIC, "Gate remains open for unknown person")
+                self.speaker.speak_text_async(f"Selamat datang di ti leb")
             else:
                 logger.error(f"Failed to record unknown person: {response.text}")
                 
@@ -334,9 +376,9 @@ class FaceDetectionSystem:
                 
                 if not is_unknown:
                     if status == "masuk":
-                        speak_text(f"Selamat {time_period} {employee_name}, selamat datang di ti leb, silakan {status}")
+                        self.speaker.speak_text_async(f"Selamat {time_period} {employee_name}, selamat datang di ti leb, silakan {status}")
                     else:
-                        speak_text(f"sampai jumpa {employee_name}, hati-hati di jalan")
+                        self.speaker.speak_text_async(f"sampai jumpa {employee_name}, hati-hati di jalan")
                                    
             elif response.status_code == 400 and "early_checkout" in response.json().get("status", ""):
                 logger.warning(f"Early checkout attempt for {employee_name} - Minimum working time not reached")
@@ -370,7 +412,7 @@ class FaceDetectionSystem:
             
             _, buffer = cv2.imencode('.jpg', face)
             face_base64 = base64.b64encode(buffer).decode('utf-8')
-            logger.info(f"Captured face for unknown person, size: {len(face_base64)} bytes")
+            logger.info(f"Captured face, size: {len(face_base64)} bytes")
 
             self._handle_face_recognition(face_base64)
             self.last_capture_time = current_time
