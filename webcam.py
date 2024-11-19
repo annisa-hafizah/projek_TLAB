@@ -472,8 +472,8 @@ class FaceDetectionSystem:
         self.camera_handler = CameraHandler(CAMERA_CONFIG)
 
         # Performance settings
-        self.CAPTURE_INTERVAL = 5
-        self.CHECKOUT_INTERVAL = 10
+        self.CAPTURE_INTERVAL = 8
+        self.CHECKOUT_INTERVAL = 60
         self.FRAME_SKIP = 3
         self.DETECTION_SCALE = 0.3
 
