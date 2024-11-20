@@ -63,6 +63,17 @@ except Exception as e:
     logger.error(f"MQTT Connection failed: {e}")
     # Continue without MQTT if connection fails
 
+def get_time_period():
+    hour = datetime.now().hour
+    if 5 <= hour < 12:
+        return "pagi"
+    elif 12 <= hour < 15:
+        return "siang"
+    elif 15 <= hour < 18:
+        return "sore"
+    else:
+        return "malam"
+    
 class LoggerSetup:
     @staticmethod
     def setup_logger():
@@ -221,16 +232,6 @@ class CameraHandler:
         if self.cap:
             self.cap.release()
     
-def get_time_period():
-    hour = datetime.now().hour
-    if 5 <= hour < 12:
-        return "pagi"
-    elif 12 <= hour < 15:
-        return "siang"
-    elif 15 <= hour < 18:
-        return "sore"
-    else:
-        return "malam"
 
 def get_last_attendance_from_api(employee_name):
     """
@@ -633,7 +634,7 @@ class FaceDetectionSystem:
             
             if response.status_code == 200:
                 data = response.json()
-                time_period = data.get('period', get_time_period())
+                time_period = get_time_period()#data.get('period')
                 
                 if "warning" in data:
                     logger.warning(f"{employee_name} {status} - {time_period} - {data['warning']}")
