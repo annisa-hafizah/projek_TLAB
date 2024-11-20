@@ -402,7 +402,7 @@ def record_attendance():
         with sqlite3.connect(db_path) as conn:
             cursor = conn.cursor()
             current_date = datetime.now().strftime('%Y-%m-%d')
-            current_time = datetime.now().strftime('%H:%M:%S')
+            current_time = (datetime.now()+timedelta(hours=7)).strftime('%H:%M:%S')
 
             # If it's an unknown person, handle separately
             if employee_name == "Unknown Person":
