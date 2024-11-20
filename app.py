@@ -245,8 +245,8 @@ def identify_employee():
         # Generate embedding
         target_embedding = DeepFace.represent(
             img_path=img,
-            model_name="Facenet",
-            detector_backend="opencv",
+            model_name=MODEL_NAME,
+            detector_backend=DETECTOR_BACKEND,
             enforce_detection=False
         )[0]["embedding"]
         app.logger.info("Successfully generated face embedding")
@@ -491,7 +491,7 @@ def record_attendance():
                             day=datetime.now().day
                         )
                         
-                        if time_since_last_checkout.total_seconds() < 600:
+                        if time_since_last_checkout.total_seconds() < 300:
                             return jsonify({
                                 "message": "Harap tunggu 10 menit sebelum check-in kembali.",
                                 "status": "too_early_for_checkin"

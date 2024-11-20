@@ -9,8 +9,10 @@ from gtts import gTTS
 import os
 import paho.mqtt.client as mqtt
 from dotenv import load_dotenv
-import os
 import hashlib
+import threading
+from queue import Queue
+import subprocess
 
 load_dotenv()
 
@@ -41,14 +43,11 @@ def on_connect(client, userdata, flags, rc):
         logger.error("Failed to connect to MQTT broker, Return code %d", rc)
 
 mqtt_client.on_connect = on_connect
-mqtt_client.username_pw_set(MQTT_USER, MQTT_PASSWORD)
+# mqtt_client.username_pw_set(MQTT_USER, MQTT_PASSWORD)
 mqtt_client.connect(MQTT_BROKER, MQTT_PORT, 60)
 mqtt_client.loop_start()
 
-def speak_text(text):
-    tts = gTTS(text=text, lang='id')
-    tts.save("greeting.mp3")
-    os.system("mpg321 greeting.mp3")
+
     
 def get_time_period():
     hour = datetime.now().hour
@@ -176,21 +175,132 @@ def get_last_attendance_from_api(employee_name):
 def generate_face_hash(face_image_base64):
     """Generate a unique hash for the face image."""
     return hashlib.md5(face_image_base64.encode()).hexdigest()
+
+class AsyncSpeaker:
+    def __init__(self, max_queue_size=2):
+        self.speech_queue = Queue(maxsize=max_queue_size)  # Limit queue size
+        self.current_process = None
+        self.speaker_thread = None
+        self.is_running = False
+        self.audio_cache = {}  # Cache for frequently used messages
+        self.cache_lock = threading.Lock()
+        self.start_speaker_thread()
+
+    def start_speaker_thread(self):
+        """Start the speaker thread if not already running"""
+        if not self.speaker_thread or not self.speaker_thread.is_alive():
+            self.is_running = True
+            self.speaker_thread = threading.Thread(target=self._process_speech_queue)
+            self.speaker_thread.daemon = True
+            self.speaker_thread.start()
+
+    def speak_text_async(self, text):
+        """Add text to speech queue if queue is not full"""
+        try:
+            self.speech_queue.put_nowait(text)  # Non-blocking put
+        except Queue.Full:
+            logging.warning("Speech queue is full, skipping message")
+
+    def _get_audio_file(self, text):
+        """Get audio file from cache or generate new one"""
+        text_hash = hashlib.md5(text.encode()).hexdigest()
+        
+        with self.cache_lock:
+            if text_hash in self.audio_cache:
+                return self.audio_cache[text_hash]
+            
+            filename = f"greeting_{text_hash}.mp3"
+            if not os.path.exists(filename):
+                tts = gTTS(text=text, lang='id')
+                tts.save(filename)
+            
+            self.audio_cache[text_hash] = filename
+            # Keep cache size limited
+            if len(self.audio_cache) > 10:  # Keep only 10 most recent messages
+                oldest_key = next(iter(self.audio_cache))
+                oldest_file = self.audio_cache.pop(oldest_key)
+                try:
+                    if os.path.exists(oldest_file):
+                        os.remove(oldest_file)
+                except OSError:
+                    pass
+                    
+            return filename
+
+    def _process_speech_queue(self):
+        """Process speech queue in background"""
+        while self.is_running:
+            try:
+                if not self.speech_queue.empty():
+                    text = self.speech_queue.get(timeout=1)
+                    
+                    try:
+                        filename = self._get_audio_file(text)
+                        
+                        # Stop current speech if playing
+                        if self.current_process is not None:
+                            try:
+                                self.current_process.terminate()
+                                self.current_process.wait()
+                            except:
+                                pass
+
+                        # Play new speech
+                        self.current_process = subprocess.Popen(
+                            ['mpg321', '-q', filename],  # -q for quiet mode
+                            stdout=subprocess.DEVNULL,
+                            stderr=subprocess.DEVNULL
+                        )
+                        self.current_process.wait()
+                        
+                    except Exception as e:
+                        logging.error(f"Error playing speech: {e}")
+                        
+                else:
+                    # Sleep to prevent CPU spinning when queue is empty
+                    time.sleep(0.1)
+                    
+            except Exception as e:
+                logging.error(f"Error in speech thread: {e}")
+                time.sleep(0.1)  # Prevent rapid spinning on error
+
+    def cleanup(self):
+        """Cleanup resources"""
+        self.is_running = False
+        if self.current_process:
+            self.current_process.terminate()
+        
+        # Cleanup cached files
+        with self.cache_lock:
+            for filename in self.audio_cache.values():
+                try:
+                    if os.path.exists(filename):
+                        os.remove(filename)
+                except OSError:
+                    pass
         
 class FaceDetectionSystem:
     def __init__(self):
-        self.unknown_faces = {}  # Dictionary to track unknown faces and their detection times
+        self.unknown_faces = {}
         self.SERVER_URL = SERVER_URL
-        self.CAPTURE_INTERVAL = 10
-        self.CHECKOUT_INTERVAL = 20  # 10 minutes for testing
-        self.UNKNOWN_RECORD_INTERVAL = 300  # 5 minutes between unknown person records
-        self.FRAME_SKIP = 2
+        self.CAPTURE_INTERVAL = 6
+        self.CHECKOUT_INTERVAL = 60
+        self.UNKNOWN_RECORD_INTERVAL = 300
+        self.FRAME_SKIP = 3
         self.DETECTION_SCALE = 0.5
         self.attendance_records = {}
         self.cap = cv2.VideoCapture(CAMERA_CONFIG)
         self.face_cascade = cv2.CascadeClassifier(cv2.data.haarcascades + 'haarcascade_frontalface_default.xml')
         self.frame_count = 0
         self.last_capture_time = time.time()
+        self.speaker = AsyncSpeaker()
+
+        # Optimize camera capture for Jetson
+        self.cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)  # Minimize frame buffer
+        
+        # Set lower resolution if needed
+        self.cap.set(cv2.CAP_PROP_FRAME_WIDTH, 640)
+        self.cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 480)
 
     def _handle_unknown_person(self, face_data):
         """Handle detection and recording of unknown persons."""
@@ -228,9 +338,9 @@ class FaceDetectionSystem:
                 self.unknown_faces[face_hash] = current_time
                 logger.info(f"Successfully recorded unknown person: {unknown_id}")
                 
-                # MQTT and speech
-                mqtt_client.publish(MQTT_TOPIC, "Gate remains open for unknown person")
-                speak_text(f"Tamu, Selamat {get_time_period()}.")
+                # MQTT and speech for unknown person
+                # mqtt_client.publish(MQTT_TOPIC, "Gate remains open for unknown person")
+                # self.speaker.speak_text_async(f"Selamat datang di ti leb")
             else:
                 logger.error(f"Failed to record unknown person: {response.text}")
                 
@@ -334,9 +444,13 @@ class FaceDetectionSystem:
                 
                 if not is_unknown:
                     if status == "masuk":
-                        speak_text(f"Selamat {time_period} {employee_name}, selamat datang di ti leb, silakan {status}")
+                        self.speaker.speak_text_async(
+                            f"Selamat {time_period} {employee_name}, selamat datang di ti leb, silakan {status}"
+                        )
                     else:
-                        speak_text(f"sampai jumpa {employee_name}, hati-hati di jalan")
+                        self.speaker.speak_text_async(
+                            f"sampai jumpa {employee_name}, hati-hati di jalan"
+                        )
                                    
             elif response.status_code == 400 and "early_checkout" in response.json().get("status", ""):
                 logger.warning(f"Early checkout attempt for {employee_name} - Minimum working time not reached")
@@ -345,6 +459,12 @@ class FaceDetectionSystem:
 
         except requests.exceptions.RequestException as e:
             logger.error(f"API request error: {e}")
+
+    def cleanup(self):
+        """Cleanup resources"""
+        self.speaker.cleanup()
+        self.cap.release()
+        cv2.destroyAllWindows()
 
     def process_frame(self, frame):
         self.frame_count += 1
@@ -370,7 +490,7 @@ class FaceDetectionSystem:
             
             _, buffer = cv2.imencode('.jpg', face)
             face_base64 = base64.b64encode(buffer).decode('utf-8')
-            logger.info(f"Captured face for unknown person, size: {len(face_base64)} bytes")
+            logger.info(f"Captured face, size: {len(face_base64)} bytes")
 
             self._handle_face_recognition(face_base64)
             self.last_capture_time = current_time
@@ -400,4 +520,7 @@ class FaceDetectionSystem:
 
 if __name__ == "__main__":
     system = FaceDetectionSystem()
-    system.run()
+    try:
+        system.run()
+    finally:
+        system.cleanup()
