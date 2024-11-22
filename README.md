@@ -13,7 +13,7 @@ MQTT BROKER dijalankan di linux : mosquitto 2.0.11
   
 untuk menjalankan aplikasi app.py dijalankan di server dan webcamhaar.py dijalankan di client(jetson) dan untuk employee_registration.py dijalankan di server 
 
-To deploy this on your Jetson Nano, you'll need to:
+To deploy webcamdeep.py on your Jetson Nano, you'll need to:
 
 Install required packages:
 
